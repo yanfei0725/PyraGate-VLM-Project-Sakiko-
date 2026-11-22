@@ -25,10 +25,13 @@ import torch
 import torch.nn as nn
 
 # §7.2 敏感层关键词（路径子串匹配）。顺序敏感：先判到的优先。
+# 注：教师式 AdaLN 改造后，调制层 = 共享 embedder（ada_embedder，模块级）+
+#     逐块 (1,6,dim) 小表（scale_shift_table，Parameter——模块级清单不单列，
+#     量化执行时随宿主块处理并在执行层单独标 fp16）。
 SENSITIVE_PATTERNS: Tuple[str, ...] = (
     "temporal",          # 时序注意力（含 causal / rope）
     "skips",             # skip 融合 + 门控 α（GatedSkip）
-    "adaLN_modulation",  # AdaLN-Zero 调制层/头
+    "ada_embedder",      # AdaLN 共享条件 embedder（教师式调制）
     "bottleneck",        # 3D 联合注意力瓶颈
     "head",              # 输出预测速度场 Head（OutputHead）
 )
@@ -120,11 +123,15 @@ def _selftest() -> None:
 
     # 1) 敏感层逐类验证：每类至少命中一个模块且全为 fp16
     for key, need in [("skips", "skip 门控"),
-                      ("adaLN_modulation", "AdaLN 调制"), ("bottleneck", "瓶颈"),
+                      ("ada_embedder", "AdaLN 共享 embedder"), ("bottleneck", "瓶颈"),
                       ("head", "输出头")]:
         hits = {p: v for p, v in plan.items() if key.lower() in p.lower()}
         ck(len(hits) > 0, f"{need}：命中 {len(hits)} 个模块")
         ck(all(v == FP16 for v in hits.values()), f"{need}：全部标 fp16")
+    # 1b) 教师式 AdaLN 逐块小表是 Parameter（非独立模块）——存在性 + 数量校验
+    n_tab = sum(1 for n, _ in model.named_parameters() if "scale_shift_table" in n)
+    n_blocks = len(list(model.enc_blocks)) + len(list(model.bottleneck)) + len(list(model.dec_blocks))
+    ck(n_tab == n_blocks, f"AdaLN 逐块表：{n_tab}/{n_blocks} 个块各持一个 Parameter（量化执行层单独标 fp16）")
     # 时序注意力靠类型识别（路径只有 attn），验证 TemporalAttention 模块全为 fp16
     temp_mods = [(p, mod) for p, mod in model.named_modules() if _is_temporal_type(mod)]
     ck(len(temp_mods) > 0, f"时序注意力：命中 {len(temp_mods)} 个 TemporalAttention/GSA 模块")
