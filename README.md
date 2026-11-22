@@ -1,5 +1,7 @@
 # PyraGate-VLM · 3D U-ViT Backbone（Udit）
 
+> English overview: [docs/README_EN.md](docs/README_EN.md)
+
 纯 PyTorch 实现的视频流匹配 DiT 主干骨架。无 diffusers / flash-attn 硬依赖，可在纯 CPU 上实例化与自检；GPU 前向与训练管线已在 AMD Radeon RX 7900 XT（ROCm 7.2.1，Windows）上实测。
 
 ## 模型概览

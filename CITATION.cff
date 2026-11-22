@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+title: "PyraGate-VLM (Project Sakiko): a 4.0B 3D U-ViT video-generation backbone"
+message: >-
+  If you use this software, please cite it using the metadata from this file.
+type: software
+authors:
+  - alias: yanfei0725
+repository-code: "https://github.com/yanfei0725/PyraGate-VLM-Project-Sakiko-"
+license: BSL-1.1
+date-released: "2026-11-22"
+abstract: >-
+  A pure-PyTorch 3D U-ViT backbone (Udit, 4.0B parameters) for video
+  flow-matching generation: teacher-style AdaLN conditioning, 2+1D
+  spatial-temporal attention with optional GSA gating, Dual-Act SwiGLU,
+  global conditional-space MoE experts, real-form 3D RoPE, and a distilled
+  training pipeline (CFG-A teacher targets, Adafactor, staged freezing).
