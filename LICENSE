@@ -1,0 +1,105 @@
+Business Source License 1.1
+
+Licensor: PyraGate-VLM Authors
+Licensed Work: PyraGate-VLM (3D U-ViT video generation backbone, training tooling, and documentation)
+Additional Use Grant: You may make use of the Licensed Work for research, education, evaluation, and other non-production purposes. Production use is permitted only after the Change Date or under a separate license from the Licensor.
+Change Date: 2030-01-01
+Change License: GNU General Public License v3.0 or later
+
+Terms
+
+The Licensor hereby grants you the right to copy, modify, create derivative
+works, redistribute, and make non-production use of the Licensed Work. The
+Licensor may make an Additional Use Grant, above, permitting limited
+production use.
+
+Effective on the Change Date, or the fourth anniversary of the first publicly
+available distribution of a specific version of the Licensed Work under this
+License, the Licensor hereby grants you rights under the terms of the Change
+License, above.
+
+If your use of the Licensed Work does not comply with the requirements of
+this License or the Additional Use Grant, then the rights granted to you
+under this License are void.
+
+Section 5 has two exceptions to the license grant. Section 5.2 makes clear
+that the Licensor may offer the Licensed Work under multiple licenses
+including this License and another license. Section 5.3 makes clear that the
+Licensed Work is provided under this License "AS IS" and without any
+warranty.
+
+The Licensor represents that the Licensed Work and any modifications are
+original works and that the Licensor has not entered into any license
+agreements with any third party that would cause the Licensed Work or any
+modifications to infringe any copyright, patent, trademark, or trade secret
+of any third party. However, the Licensor does not make any such
+representation for the Licensed Work itself or any modifications that were
+made by someone other than the Licensor. The Licensor makes no other
+representations or warranties regarding the Licensed Work.
+
+1. Grant of Copyright License. Subject to the terms and conditions of this
+License, the Licensor hereby grants you a royalty-free, non-exclusive,
+non-transferable copyright license to do the following:
+
+a. copy, modify, and create derivative works of the Licensed Work;
+b. redistribute the Licensed Work and derivative works thereof; and
+c. make non-production use of the Licensed Work and derivative works thereof.
+
+2. Grant of Patent License. Subject to the terms and conditions of this
+License, the Licensor hereby grants you a royalty-free, non-exclusive,
+non-transferable patent license to make, have made, use, offer to sell, sell,
+import, and otherwise transfer the Licensed Work.
+
+3. Limitations. Subject to Section 5, the rights granted to you under this
+License are conditioned on your compliance with the following limitations:
+
+a. You may not exercise any of the rights granted to you by this License in
+production of the Licensed Work. "Production use" includes, without
+limitation, use of the Licensed Work by you or any other person or entity for
+commercial purposes, and use of the Licensed Work that could enable you or
+any other person or entity to generate revenue directly or indirectly. It is
+the responsibility of the person or entity desiring to use the Licensed Work
+to determine whether such use is production use.
+
+b. You may not alter, remove, or obscure any licensing, copyright, or other
+notices of the Licensor in the Licensed Work. This includes correcting any
+incorrect notices.
+
+c. You may not use the Licensed Work in violation of applicable law,
+including without limitation any applicable export controls.
+
+4. Definitions.
+
+a. "Licensed Work" means the work specified in the Licensed Work section
+above.
+
+b. "Licensor" means the person or entity specified in the Licensor section
+above.
+
+c. "Change Date" means the date specified in the Change Date section above.
+
+d. "Change License" means the license specified in the Change License
+section above.
+
+5. Exceptions to License Grant.
+
+5.1 The Licensor may grant You additional permissions concerning the
+Licensed Work as specified in the Additional Use Grant above. Any such
+Additional Use Grant forms part of this License.
+
+5.2 Multiple Licensing. The Licensor may offer the Licensed Work under
+multiple licenses, including this License and another license. You
+acknowledge and agree that the Licensor may offer the Licensed Work under
+other licenses and that Your acceptance of this License does not prevent the
+Licensor from offering the Licensed Work under other licenses.
+
+5.3 Warranty. The Licensed Work is provided under this License "AS IS",
+WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING WITHOUT
+LIMITATION ANY WARRANTIES REGARDING THE CONTENTS OF THE LICENSED WORK, THE
+LICENSED WORK BEING DEFECT FREE, OR THE LICENSED WORK BEING COMPLIANT WITH
+ANY SPECIFICATIONS. THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE
+LICENSED WORK IS WITH YOU. SHOULD THE LICENSED WORK PROVE DEFECTIVE IN ANY
+RESPECT, YOU (AND NOT THE LICENSOR) ASSUME THE COST OF ANY NECESSARY
+SERVICING, REPAIR, OR CORRECTION. This disclaimer of warranty constitutes an
+essential part of this License. No use of the Licensed Work is authorized
+hereunder except under this Disclaimer.

@@ -1,0 +1,23 @@
+# ---- data / artifacts (never publish) ----
+__pycache__/
+*.pyc
+ckpt/
+ckpt_bench/
+ckpt_speedtest/
+latents_real/
+latents_test/
+logs/
+runs/
+synth/
+nohup.out
+daemon_nohup.log
+daemon_run.log
+training_daemon.log
+
+# ---- internal history snapshots ----
+*.bak-*
+*.bak
+
+# ---- editors / OS ----
+.DS_Store
+Thumbs.db
