@@ -60,7 +60,7 @@ swiglu_params = sum(p.numel() for p in ffn.parameters())
 check(abs(swiglu_params - native_params) <= 4 * C,  # dim 取整误差（3 矩阵 × 1 维）
       f"SwiGLU {swiglu_params:,} ≈ 原生 FFN {native_params:,}（参数持平，误差<{4*C}）")
 
-banner("2b. GSA 门控混合时空注意力（设计选定，另一条路线）")
+banner("2b. GSA 门控混合时空注意力（另一条可选路线）")
 gsa = GSA(C, nh, cond_dim=C)
 y = gsa(x, (T, H, W), cond=torch.randn(B, C))
 check(y.shape == x.shape, f"GSA 输出形状保持 {tuple(y.shape)}")
@@ -109,6 +109,12 @@ total, trainable = count_parameters(model)
 print(f"  tiny 参数量：{total:,}（trainable {trainable:,}）")
 
 banner("7. skip 消融：置 0 后输出必须改变（证明 skip 生效）")
+# 从零配置 alpha_init=0.0 时 skip 初始就是关闭的；这里显式开 0.1 再测“开/关差异”。
+# 同时把零初始化主头改成非零，否则整个输出恒为 0，任何旁路差异都不可见。
+with torch.no_grad():
+    model.head.head.weight.normal_(0, 0.02)
+    for s in model.skips:
+        s.alpha.fill_(0.1)
 v_on, _ = model(latent, t_emb, text_emb, return_aux=True)
 disable_all_skips(model)
 with torch.inference_mode():
@@ -262,14 +268,10 @@ with torch.inference_mode():
     vg, _ = model_g(latent, t_emb, text_emb, return_aux=True)
 check(vg.shape == v.shape, f"GSA 版输出形状一致 {tuple(vg.shape)}")
 
-banner("8c. VAE 轻量版路径（AMD 蜂鸟，保持 fp16）——可选环境项")
+banner("8c. VAE 轻量版路径存在性（AMD 蜂鸟，保持 fp16）")
 vae_path = cfg.vae_path
 print("  vae_path:", vae_path)
-if _os.path.exists(vae_path):
-    print("  [PASS] VAE 权重在盘上:", vae_path)
-else:
-    print("  [SKIP] VAE 权重不在盘上（发布仓库不含权重文件；"
-          "设 PYRAGATE_VAE_PATH 指向本地权重后可验）——不阻塞结构自检")
+check(_os.path.exists(vae_path), "轻量 VAE 权重在盘上")
 
 banner("8f. 3D RoPE（对齐教师 Wan2.2，t/h/w 分频）")
 from uvit3d import rope_params, rope_apply_3d
@@ -366,7 +368,7 @@ check(torch.allclose(y_c, ref_causal, atol=1e-5),
 # 配置确实贯通到所有 SelfAttention（含 spatial/temporal/joint）
 cfg_fa = UViT3DConfig.tiny()
 cfg_fa.attn_backend = "flash2"
-check(cfg_fa.attn_backend == "flash2", "配置默认后端 = flash2（设计选定）")
+check(cfg_fa.attn_backend == "flash2", "配置默认后端 = flash2")
 model_fa = UViT3D(cfg_fa)
 be_enc0 = model_fa.enc_blocks[0].attn.attn.attn_backend
 be_bot = model_fa.bottleneck[0].attn.attn.attn_backend
@@ -526,7 +528,7 @@ check(torch.equal(_vm, _v), "10.MoE α=0端到端逐bit恒等（回退红线）"
 check(_mm.global_moe is not None and len(_mm.global_moe.experts) == 3, "10.端到端全局MoE三专家")
 
 banner("11. 3.5B 改造新增件：实数 RoPE / 教师式 adaLN / 轻量算子 / F2-F5")
-# 11a RoPE 实数版 vs 复数版数值等价（评审指定真网格 3,15,22）
+# 11a RoPE 实数版 vs 复数版数值等价（审查员指定真网格 3,15,22）
 from uvit3d import rope_cos_sin, rope_apply_real, rotate_half
 _g = (3, 15, 22)
 _hd = 16

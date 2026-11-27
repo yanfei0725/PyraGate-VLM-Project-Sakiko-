@@ -4,14 +4,14 @@ PyraGate-VLM v2.0 — VLM 接入（北大桥 + 多尺度分层注入）
 参考本地北大桥（Qwen3-VL hidden -> Wan 条件空间）的精确定义：
   `backups/baseline_v1_20261121/custom_nodes_ComfyUI-WanVLMBridge/wan_vlm_bridge.py`
 
-北大桥结构：
+北大桥结构（逐行对齐 LoomVideo `src/models/transformers/loomvideo.py:30-58`）：
   Qwen3-VL hidden [B,L,4096]
     -> QwenRMSNorm(输入端, fp32 累加)
     -> Linear(4096, 4*3072=12288) -> GELU(tanh)
     -> Linear(12288, 3072)
     -> Wan 条件空间 [B,L,3072]
 
-多尺度分层注入（白皮书 §4.3 / 设计选定）：
+多尺度分层注入（白皮书 §4.3 / 用户选择）：
   - 低分辨率 stage：桥输出**全局池化** -> AdaLN cond（粗语义：构图/运动）
   - 高分辨率 stage：桥输出 **per-token** -> CrossAttn KV（细粒度：材质/笔触/身份）
 
@@ -46,7 +46,7 @@ class QwenRMSNorm(nn.Module):
 
 class NorthBridge(nn.Module):
     """北大桥：VLM hidden (4096) -> 主干条件空间 (3072)。
-    结构与权重键与预训练桥权重 gen_model.pth 的 `mllm_embedder.*` 对齐。
+    结构与权重键与 LoomVideo gen_model.pth `mllm_embedder.*` 对齐。
     """
     BRIDGE_PREFIX = "mllm_embedder."
 
@@ -180,14 +180,23 @@ class VLMInjector(nn.Module):
     """
     def __init__(self, dim: int, num_heads: int, n_blocks: int,
                  vlm_dim: int = 4096, stage_ratio: float = 0.5,
-                 bridge: Optional[NorthBridge] = None, low_rank: int = 0):
+                 bridge: Optional[NorthBridge] = None, low_rank: int = 0,
+                 bridge_rank: int = 0):
         super().__init__()
         self.dim = dim
         self.n_blocks = n_blocks
         self.stage_ratio = stage_ratio
         self.low_rank = int(low_rank)
         self.split_idx = int(n_blocks * stage_ratio)   # 前 split_idx 个 block = 低分辨率
-        self.bridge = bridge if bridge is not None else NorthBridge(vlm_dim, dim)
+        if bridge is not None:
+            self.bridge = bridge
+        elif int(bridge_rank) > 0:
+            # 低秩北大桥：4*rank 中间维，参数 ≈ 4*d_in*rank + 4*rank*d_out。
+            # 默认 bridge_rank=0 保持原 NorthBridge（可严格 load gen_model.pth）。
+            self.bridge = NorthBridge(vlm_dim, hidden_size=int(bridge_rank),
+                                      out_features=dim)
+        else:
+            self.bridge = NorthBridge(vlm_dim, dim)
         # 全局路径：池化桥输出 -> AdaLN cond 维度（注入到现有 cond）
         self.global_proj = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, dim))
         nn.init.zeros_(self.global_proj[-1].weight)

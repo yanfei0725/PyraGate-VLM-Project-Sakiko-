@@ -1,3 +1,20 @@
+# PyraGate-VLM 技术白皮书 · v3.0 更新说明
+
+> 本文件正文为 v2.0 技术记录（保留历史）。以下 v3.0 摘要说明本版本架构与训练口径的增量；正文未逐段改写，凡与 v3.0 冲突处以本摘要与源码为准。
+
+## v3.0 增量摘要
+
+- **全门控输出头**：三分频残差头（latent 空间硬带限）、内嵌 Dual-Act 门控、2D 相对位置编码、抗锯齿、金字塔捷径、逐帧高通支路（σ 衰减）。
+- **v3 可选架构扩展（默认关、零初始化恒等）**：
+  - `text_cross`：低秩 UMT5 token cross-attn，σ 门控经唯一共享入口；支持从官方 cross-attn 权重初始化。
+  - `AdaLNZeroText` / `SigmaSlidingAdapter` / `TierContextTokens`（4 层 register token，经 AdaLN 注入）。
+  - `SyntaxCompiler`：PAU 调度（skip / ffn-mod / cross-budget / tier-mod）；aux loss 保留可微路径，控制信号注入主干前 detach。
+  - `FreqRouter`：FFT 描述符 → 每头频带路由 bias，仅作用于 self token，cross 段零 bias 补齐，退化网格恒等回退。
+- **训练口径**：分阶段自监督 + 教师蒸馏换装、低 σ 精确回填、多 aux loss（帧 / token-boundary / 速度幅值 / 频谱 / 边界 / REPA / syntax）、主前向 aux 张量立即快照、门控/新模块独立 AdamW 分组、续训形状/参数名守卫。
+- **可移植性**：所有运行时路径由命令行参数或环境变量给出（如 `COMFYUI_DIR`、`PYTHON`），仓库不含任何本机绝对路径、私人笔记、检查点或日志。
+
+---
+
 # PyraGate-VLM（Project Sakiko）技术白皮书 v2.0（U-ViT 底座版）
 
 > 版本：v2.0 = v1.2 全部底座无关资产继承 + 底座路线整体替换（Hummingbird-XT 零训练 → 自研 3D U-ViT 蒸馏 + 通用增强专家 + 16G 混合量化部署）·定位通用化修订

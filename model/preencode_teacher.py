@@ -1,38 +1,23 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""CFG-A 教师目标离线预编码（CFG-A 合成场口径）。
+"""CFG-A 教师目标预编码（兼容入口，2026-11-23 改造）
 
-口径 A：教师按 CFG6 合成速度场作为蒸馏 target
-    v_teacher = v_uncond + 6 * (v_cond - v_uncond)
-学生单通道学会它 -> 推理 CFG-free，成本砍半，且对齐冠军管线真实采样轨迹。
+★ 重大变更：**废弃 ComfyUI 服务依赖**。教师推理统一走 tools/teacher_generator.py
+  的本地直推理（comfy.sd 直接加载权重 + 进程内前向），不再 POST /prompt、
+  不再要求 --comfy-url 有服务在跑。本文件只保留命令行/函数名兼容，实现转发过去。
 
-教师 = Wan5B M85 混血权重（Wan5B_fastwan_m85.safetensors + 时序低通算子，
-flicker 0.0244 / 身份 0.9892）。教师 10GB 不能与学生共驻显存 -> 离线预编码，
-训练时 train_backbone.py 只读本脚本产出的 {x0,noise,t,t_emb,text_emb,v_teacher}。
+★ 口径修正（旧实现三处错误，全部已改）：
+  1. 符号：流匹配速度场 v = dx_t/dσ = ε - x0。旧写成 `v = x0 - eps`，方向整个反了
+     ——学生学到的会是负速度场，cos 直接为负、loss 永远压不下去。
+  2. 加噪：x_t = (1-σ)·x0 + σ·ε。旧写成 x0 + σ·ε，σ=0.5 时与标准差差 47.6%。
+  3. 缓存里的 t_emb / text_emb 只是占位 zeros，训练侧必须自己重算（train_staged 已改）。
 
-★ 数据前置（当前阻塞，如实标注）：
-  453 条 latents_real/*.pt 来自 ComfyUI 历史生成，只有 {latent,src}，
-  **无配对文本 prompt**。CFG-A 必须对每个 latent 有对应 prompt 才能跑
-  cond(带文本)/uncond(空文本) 两遍。数据到位的两种方式：
-    1) 提供 prompts.json：{latent文件名: prompt文本}，本脚本直接读；
-    2) 从 src 视频反推 caption（需本地 captioner，非本脚本职责）。
-  无 prompt 时本脚本 --dry-run 只验流程不产目标，绝不编造 target。
+CFG-A：v_teacher = v_uncond + cfg*(v_cond - v_uncond)（在模型输出空间合成）。
 
-教师推理链路（本地资源已勘察齐全）：
-  - 教师权重（Wan5B_fastwan_m85.safetensors，10GB；路径经 --teacher-weight 或 PYRAGATE_TEACHER 指定）
-  - ComfyUI Wan 节点（comfy/ldm/wan + comfy_extras/nodes_wan.py）
-  - 文本编码器（UMT5-XXL，hidden=4096）
-  - 时序低通算子：教师混血定义见白皮书 V2-21
-  本脚本通过 ComfyUI 的 WAN 推理 API（--comfy-url）跑 cond/uncond 两遍，
-  取 20 步轨迹的噪声预测 epsilon 换算速度场 v = x0 - eps（流匹配口径），再 CFG 合成。
-
-用法：
-  # 1) 先 dry-run 验证流程与数据接口（不跑 GPU）
-  python preencode_teacher.py --latent-dir latents_real --prompts prompts.json --dry-run
-  # 2) prompt 到位 + ComfyUI 起来后跑真预编码
-  python preencode_teacher.py --latent-dir latents_real --prompts prompts.json \
-      --teacher-weight /path/to/Wan5B_fastwan_m85.safetensors --comfy-url http://127.0.0.1:8188 \
-      --steps 20 --cfg 6 --out teachers_real
+用法（与旧版兼容）：
+  python preencode_teacher.py --latent-dir latents_new --prompts teacher_prompts.json \
+      --cfg 6 --out teacher_targets --dry-run
+  去掉 --dry-run 即真跑；--comfy-url 已失效，传了只打印一条提示。
 """
 import argparse
 import glob
@@ -40,26 +25,20 @@ import json
 import os
 import sys
 
-import torch
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..", "tools")))
 
-TEACHER_DEFAULT = os.environ.get("PYRAGATE_TEACHER", "Wan5B_fastwan_m85.safetensors")
+TEACHER_DEFAULT = r"./cache/Wan5B_fastwan_m85.safetensors"
 CFG_DEFAULT = 6.0
-STEPS_DEFAULT = 20   # 教师 20 步、学生跟 20 步（对齐教师采样，非少步设定）
+STEPS_DEFAULT = 20   # 保留参数位，直推理不再按采样步数走（单点 σ 前向）
 
 
 def load_latents(latent_dir: str):
-    fs = sorted(glob.glob(os.path.join(latent_dir, "*.pt")))
+    """只返回元信息，不把全部 latent 读进内存（2335 条 ×~400MB 会直接撑爆 31GB 内存）。"""
     out = []
-    for f in fs:
-        d = torch.load(f, map_location="cpu", weights_only=False)
-        lat = d.get("latent") if isinstance(d, dict) else d
-        if lat is None:
-            continue
-        out.append({"path": f, "name": os.path.basename(f),
-                    "x0": lat.float(), "src": d.get("src", "") if isinstance(d, dict) else ""})
+    for f in sorted(glob.glob(os.path.join(latent_dir, "*.pt"))):
+        out.append({"path": f, "name": os.path.basename(f)})
     return out
 
 
@@ -70,96 +49,89 @@ def load_prompts(prompts_path: str):
         return json.load(fh)
 
 
-def synthesize_cfg(v_cond: torch.Tensor, v_uncond: torch.Tensor,
-                   cfg: float = CFG_DEFAULT) -> torch.Tensor:
+def synthesize_cfg(v_cond, v_uncond, cfg: float = CFG_DEFAULT):
     """口径 A：v = uncond + cfg*(cond - uncond)。"""
     return v_uncond + cfg * (v_cond - v_uncond)
 
 
-def eps_to_velocity(x0: torch.Tensor, eps: torch.Tensor) -> torch.Tensor:
-    """噪声预测 eps -> 流匹配速度场 v = x0 - eps。"""
-    return x0 - eps
+def eps_to_velocity(x0, eps):
+    """噪声预测 ε -> 流匹配速度场 v = ε - x0（旧版符号写反，已修正）。"""
+    return eps - x0
 
 
-def comfy_teacher_predict(latent: torch.Tensor, prompt: str, comfy_url: str,
-                          steps: int, cfg: float, uncond: bool = False):
-    """经 ComfyUI WAN 推理 API 取教师噪声预测。★ 需接入本地工作流后实装。
+def comfy_teacher_predict(latent, prompt, sigma=0.5, cfg=CFG_DEFAULT,
+                          seed=0, engine=None, uncond=False):
+    """（保留旧函数名）本地直推理，返回 CFG-A 合成速度场。
 
-    当前返回 None 并给出明确指引——不编造预测值。接入点：
-      POST {comfy_url}/prompt  with Wan2.2 T2V/I2V workflow，
-      文本节点喂 prompt（uncond 时喂空串 ""），采样步数=steps，
-      从 KSampler/WanSampler 输出取 latent 噪声 -> 转 eps。
+    旧签名是 (latent, prompt, comfy_url, steps, cfg, uncond)；这里改为关键字形式，
+    调用方若仍按位置传 comfy_url 会落进 sigma —— 请改用 teacher_generator.TeacherEngine。
     """
-    raise NotImplementedError(
-        "教师推理需接入本地 ComfyUI Wan 工作流（blueprints/"
-        "Text to Video (Wan 2.2).json）。步骤：\n"
-        "  1) 启动 ComfyUI API（--comfy-url）\n"
-        "  2) 加载 M85 权重 + UMT5-XXL 文本编码器 + 时序低通算子\n"
-        "  3) 对每个 latent 跑 cond(prompt) 与 uncond('') 各一遍，steps=20\n"
-        "  4) 取两遍 eps，经 eps_to_velocity + synthesize_cfg 合成 v_teacher\n"
-        "本脚本拒绝在未接入时编造 target（会毁掉整轮训练）。")
+    if engine is None:
+        raise RuntimeError("请传入 teacher_generator.TeacherEngine 实例；本函数不再自建引擎")
+    text = "" if uncond else prompt
+    rec = engine.predict_velocity(text, latent, sigma, seed=seed)
+    return rec["v_teacher"]
 
 
 def main():
-    ap = argparse.ArgumentParser(description="CFG-A 教师目标离线预编码")
-    ap.add_argument("--latent-dir", default=os.path.join(HERE, "latents_real"))
-    ap.add_argument("--prompts", default="", help="prompt 映射 JSON：{latent文件名: 文本}")
+    ap = argparse.ArgumentParser(description="CFG-A 教师目标离线预编码（本地直推理）")
+    ap.add_argument("--latent-dir", default=os.path.join(HERE, "latents_new"))
+    ap.add_argument("--prompts", default=os.path.join(HERE, "teacher_prompts.json"))
     ap.add_argument("--teacher-weight", default=TEACHER_DEFAULT)
-    ap.add_argument("--comfy-url", default="http://127.0.0.1:8188")
-    ap.add_argument("--steps", type=int, default=STEPS_DEFAULT)
+    ap.add_argument("--text-encoder", default=r"./cache/umt5_xxl_int8.safetensors")
+    ap.add_argument("--comfy-url", default="", help="已废弃，仅兼容旧脚本；不会再访问")
+    ap.add_argument("--steps", type=int, default=STEPS_DEFAULT, help="保留参数位，直推理不用")
     ap.add_argument("--cfg", type=float, default=CFG_DEFAULT)
-    ap.add_argument("--out", default=os.path.join(HERE, "teachers_real"))
-    ap.add_argument("--dry-run", action="store_true", help="只验流程与数据接口，不跑 GPU")
+    ap.add_argument("--out", default=os.path.join(HERE, "teacher_targets"))
+    ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--min-samples", type=int, default=0)
+    ap.add_argument("--dry-run", action="store_true", help="只验流程与数学，不 import torch")
     args = ap.parse_args()
+
+    if args.comfy_url:
+        print(f"[warn] --comfy-url={args.comfy_url} 已废弃：教师推理在进程内直跑，不连服务", flush=True)
 
     lats = load_latents(args.latent_dir)
     prompts = load_prompts(args.prompts)
     have = sum(1 for x in lats if x["name"] in prompts)
     print(f"[data] latent {len(lats)} 条，配对 prompt {have} 条", flush=True)
-    if have < len(lats):
-        miss = [x["name"] for x in lats if x["name"] not in prompts][:5]
-        print(f"[block] 缺 prompt（前5）：{miss}", flush=True)
-        print("[block] CFG-A 需要每条 latent 的 prompt 才能跑 cond/uncond 两遍。"
-              "无 prompt 时不编造 target。", flush=True)
 
     if args.dry_run:
-        # 用随机 eps 验合成场数学（仅流程自检，不写盘当真 target）
-        x0 = torch.randn(2, 8, 4, 4)
+        import torch   # 仅本支路需要，且不初始化 ROCm
+        x0 = torch.randn(2, 48, 3, 30, 44)
         ec, eu = torch.randn_like(x0), torch.randn_like(x0)
         vc, vu = eps_to_velocity(x0, ec), eps_to_velocity(x0, eu)
+        # 1) 符号：v 必须等于 (ε-x0)，与 (x0-ε) 严格反向
+        assert torch.allclose(vc, ec - x0), "速度场定义错误"
+        cos_rev = torch.nn.functional.cosine_similarity(vc.flatten(), (x0 - ec).flatten(), dim=0)
+        assert float(cos_rev) < -0.999, "速度场与 (x0-ε) 同向，符号仍是反的"
+        # 2) CFG：cfg=1 时合成场必须等于 cond 场；cfg>1 时方向由 cond 主导
+        v1 = synthesize_cfg(vc, vu, 1.0)
+        assert torch.allclose(v1, vc, atol=1e-6), "cfg=1 未退化为 cond"
         v = synthesize_cfg(vc, vu, args.cfg)
-        manual = vu + args.cfg * (vc - vu)
-        assert torch.allclose(v, manual), "CFG 合成场数学错误"
-        print(f"[dry-run] CFG-A 合成场数学 OK：v=uncond+{args.cfg}*(cond-uncond)，"
-              f"输出 shape {tuple(v.shape)}。教师 20 步。", flush=True)
-        print("[dry-run] 未跑 GPU、未写 target（prompt 数据未到位）。", flush=True)
+        cos_cfg = torch.nn.functional.cosine_similarity(v.flatten(), vc.flatten(), dim=0)
+        assert float(cos_cfg) > 0, "CFG 合成场方向与 cond 相反"
+        print(f"[dry-run] 符号 OK（与 x0-ε cos={float(cos_rev):+.4f}）；"
+              f"cfg=1 退化 OK；cfg={args.cfg} 与 cond cos={float(cos_cfg):+.4f}；"
+              f"输出 {tuple(v.shape)}", flush=True)
+        print("[dry-run] 未 import comfy、未初始化 ROCm、未写盘。", flush=True)
         return
 
-    if have < len(lats):
-        print("[abort] prompt 未配齐，终止真预编码（拒绝编造 target）。", flush=True)
-        return
+    if not have:
+        print("[abort] 没有配对 prompt，拒绝编造 target。", flush=True)
+        return 1
 
-    os.makedirs(args.out, exist_ok=True)
-    for item in lats:
-        p = prompts[item["name"]]
-        # cond / uncond 两遍教师预测（需接入 ComfyUI Wan 工作流）
-        eps_c = comfy_teacher_predict(item["x0"], p, args.comfy_url,
-                                      args.steps, args.cfg, uncond=False)
-        eps_u = comfy_teacher_predict(item["x0"], "", args.comfy_url,
-                                     args.steps, args.cfg, uncond=True)
-        v_teacher = synthesize_cfg(
-            eps_to_velocity(item["x0"], eps_c),
-            eps_to_velocity(item["x0"], eps_u), args.cfg)
-        # 采样 noise/t（流匹配），保存学生训练目标
-        noise = torch.randn_like(item["x0"])
-        t = torch.rand(1)
-        t_emb = torch.zeros(256)   # 占位：实际 t_emb 由训练脚本 timestep 编码
-        text_emb = torch.zeros(4096)  # 占位：实际 UMT5 hidden 由文本编码器产出
-        torch.save({"x0": item["x0"], "noise": noise, "t": t,
-                    "t_emb": t_emb, "text_emb": text_emb, "v_teacher": v_teacher},
-                   os.path.join(args.out, item["name"]))
-    print(f"[done] 教师目标写入 {args.out}", flush=True)
+    from teacher_generator import TeacherEngine, generate
+    eng = TeacherEngine(args.teacher_weight, args.text_encoder, cfg=args.cfg)
+    eng.load()
+    try:
+        n = generate(eng, args.latent_dir, args.prompts, args.out,
+                     limit=args.limit, min_samples=args.min_samples)
+    finally:
+        eng.unload()
+    print(f"[done] 教师目标写入 {args.out}：{n} 条", flush=True)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

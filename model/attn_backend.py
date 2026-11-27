@@ -1,8 +1,8 @@
-"""FlashAttention-2 后端适配层（PyraGate 3D U-ViT）。
+"""FlashAttention-2 后端适配层（PyraGate 3D U-DiT；文件名/类名为历史兼容）。
 
 设计约束
 --------
-1. 适配层不绑定具体硬件：CPU 上自动降级 math，不冒充 GPU kernel。
+1. 用户的红线和上一轮一致：本轮只做纯 CPU 自检，不碰显卡。
 2. 真正的 FlashAttention-2 kernel 是 CUDA/ROCm-only，且只吃 fp16/bf16；
    CPU 上不可能"跑真 FA2"。所以这里做的是**显式后端选择与降级链**，
    不把 CPU 上的 math/SDPA 伪装成 FA2。
@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import functools
+import os
 import warnings
 
 import torch
@@ -42,12 +43,28 @@ _WARNED: set = set()
 
 @functools.lru_cache(maxsize=1)
 def flash2_package_version():
-    """flash_attn 包是否可 import（真 FA2 kernel）。纯 Python 探测，不碰 GPU。"""
+    """flash_attn 包是否可 import。
+
+    注意：本机这个包存在，但 ``flash_attn_2_cuda`` 原生 ROCm/HIP 扩展缺失，
+    调用会落入极慢的 Triton Python 实现。因此“可 import”绝不能当作 FA2 可用。
+    """
     try:
         import flash_attn                            # noqa: F401
         return str(getattr(flash_attn, "__version__", "unknown"))
     except Exception:
         return None
+
+
+@functools.lru_cache(maxsize=1)
+def flash2_native_kernel_available():
+    """只有原生 CUDA/HIP 扩展存在时才允许走 flash_attn 包路径。"""
+    if flash2_package_version() is None:
+        return False
+    try:
+        import flash_attn_2_cuda                     # noqa: F401
+        return True
+    except Exception:
+        return False
 
 
 @functools.lru_cache(maxsize=1)
@@ -65,6 +82,7 @@ def backend_diagnose() -> dict:
     return {
         "torch": torch.__version__,
         "flash_attn_pkg": flash2_package_version(),
+        "flash_attn_native_kernel": flash2_native_kernel_available(),
         "flash_attn_interface_pkg": flash3_package_version(),
         "sdpa_kernel_api": _HAS_SDPA_KERNEL,
         "flash_sdp_enabled": bool(torch.backends.cuda.flash_sdp_enabled()),
@@ -95,10 +113,15 @@ def resolve_backend(requested: str, q: torch.Tensor = None):
     if dtype not in _HALF_DTYPES:
         return "math", "flash2_requires_fp16_or_bf16"
 
-    if flash2_package_version() is not None:
-        return "fa2_package", "real_flash_attn_package"
+    if flash2_native_kernel_available():
+        return "fa2_package", "native_flash_attn_kernel"
+    allow_triton = str(os.environ.get("PYRAGATE_ALLOW_TRITON_FLASH_ATTN", "0")).lower()
+    if flash2_package_version() is not None and allow_triton in ("1", "true", "yes"):
+        return "fa2_package", "python_triton_fallback_explicitly_allowed"
     if _HAS_SDPA_KERNEL and torch.backends.cuda.flash_sdp_enabled():
-        return "sdpa_flash", "torch_sdpa_flash_backend"
+        reason = ("flash_attn_pkg_without_native_kernel_skipped"
+                  if flash2_package_version() is not None else "torch_sdpa_flash_backend")
+        return "sdpa_flash", reason
     return "sdpa", "flash2_backend_unavailable_use_sdpa"
 
 

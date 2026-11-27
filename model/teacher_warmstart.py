@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""R2 教师权重热启动（教师权重热启动）。
+"""R2 教师权重热启动（权重热启动 + CFG-A）。
 
-教师 Wan5B M85 混血权重（Wan5B_fastwan_m85.safetensors，10GB）
+教师 Wan5B M85 混血权重（./cache/Wan5B_fastwan_m85.safetensors，10GB）
 里同构的 embed/head 级张量直接拷进学生，作为训练初值 —— 主干从教师附近
 微调，而不是从零训。审计 R2 修正版：**只直拷 embed/head 级 3 类**，
 撤回 qkvo/SwiGLU/GSA 直拷（形状/结构不同构，改走按学生形状重拟合）。
@@ -26,7 +26,7 @@ from typing import Dict, List, Tuple
 
 import torch
 
-TEACHER_DEFAULT = os.environ.get("PYRAGATE_TEACHER", "Wan5B_fastwan_m85.safetensors")
+TEACHER_DEFAULT = r"./cache/Wan5B_fastwan_m85.safetensors"
 
 # (教师 key, 学生 key, 期望形状) —— 形状不匹配则跳过并报告，绝不 partial copy
 WARMSTART_MAP: List[Tuple[str, str, tuple]] = [
@@ -40,7 +40,76 @@ WARMSTART_MAP: List[Tuple[str, str, tuple]] = [
     ("text_embedding.0.bias", "cond_proj.bias", (3072,)),
     ("text_embedding.2.weight", "ada_embedder.embedder.1.weight", (3072, 3072)),
     ("text_embedding.2.bias", "ada_embedder.embedder.1.bias", (3072,)),
+    # 2026-11-23 结构对齐：教师的 6 段逐样本调制投影 → 学生的 ada 输出层
+    # 教师 time_projection.1 = Linear(3072, 18432=6*3072)，此前完全没拷（学生输出只有 dim）
+    ("time_projection.1.weight", "ada_embedder.embedder.3.weight", (18432, 3072)),
+    ("time_projection.1.bias", "ada_embedder.embedder.3.bias", (18432,)),
 ]
+
+
+def _student_block_tables(model) -> List[str]:
+    """按前向深度顺序列出学生逐块 AdaLN 表名（enc -> bottleneck -> dec -> 专项块）。"""
+    params = dict(model.named_parameters())
+    names: List[str] = []
+    for prefix, cap in (("enc_blocks", 64), ("bottleneck", 64), ("dec_blocks", 64)):
+        for i in range(cap):
+            n = f"{prefix}.{i}.scale_shift_table"
+            if n not in params:
+                break
+            names.append(n)
+    for n in ("temporal_special.block.scale_shift_table",
+              "spatial_special.block.scale_shift_table"):
+        if n in params:
+            names.append(n)
+    return names
+
+
+def modulation_map(model) -> List[Tuple[str, str, tuple]]:
+    """教师 blocks.N.modulation (1,6,3072) → 学生逐块表。教师 30 块，学生 32 块。
+
+    映射按深度顺序：教师 0..11 → enc 0..11，12..17 → bottleneck 0..5，18..29 → dec 0..11；
+    学生的 temporal/spatial 专项块没有教师对应物，保持零初始化（严格恒等起步）。
+    """
+    out = []
+    names = _student_block_tables(model)
+    for i, skey in enumerate(names[:30]):
+        out.append((f"blocks.{i}.modulation", skey, (1, 6, 3072)))
+    return out
+
+
+def _copy_teacher_keys(model, path: str, keys: List[Tuple[str, str, tuple]],
+                       mode: str = "full") -> Dict:
+    """按给定 key 列表拷贝教师张量；不 partial copy。"""
+    from safetensors import safe_open
+
+    if not os.path.isfile(path):
+        return {"mode": mode, "copied": [], "skipped": [f"teacher file missing: {path}"],
+                "missing": [], "ok": False}
+
+    state = model.state_dict()
+    report = {"mode": mode, "copied": [], "skipped": [], "missing": [], "ok": True}
+
+    with safe_open(path, framework="pt", device="cpu") as f:
+        teacher_keys = set(f.keys())
+        for tkey, skey, expect in keys:
+            if tkey not in teacher_keys:
+                report["missing"].append(tkey)
+                continue
+            if skey not in state:
+                report["skipped"].append(f"{skey}: 学生无此键")
+                continue
+            tv = f.get_tensor(tkey)
+            sv = state[skey]
+            if tuple(tv.shape) != tuple(sv.shape):
+                report["skipped"].append(
+                    f"{tkey}: 教师 {tuple(tv.shape)} != 学生 {tuple(sv.shape)}（提示 {expect}）")
+                continue
+            state[skey] = tv.to(dtype=sv.dtype).clone()
+            report["copied"].append(f"{tkey} -> {skey}")
+
+    model.load_state_dict(state, strict=False)
+    report["ok"] = len(report["copied"]) > 0 and not report["missing"]
+    return report
 
 
 def warmstart_from_teacher(model, path: str = TEACHER_DEFAULT,
@@ -50,48 +119,27 @@ def warmstart_from_teacher(model, path: str = TEACHER_DEFAULT,
     返回统计 dict：copied / skipped / missing，供训练日志与自检核对。
     strict_shapes=True 时形状不符直接跳过并记入 skipped（不 partial、不报错中断）。
     """
-    from safetensors import safe_open
+    return _copy_teacher_keys(model, path, WARMSTART_MAP + modulation_map(model), mode="full")
 
-    if not os.path.isfile(path):
-        return {"copied": [], "skipped": [f"teacher file missing: {path}"],
-                "missing": [], "ok": False}
 
-    state = model.state_dict()
-    report = {"copied": [], "skipped": [], "missing": [], "ok": True}
+def warmstart_modulation_only(model, path: str = TEACHER_DEFAULT) -> Dict:
+    """只注入教师 6 段 AdaLN 表 + ada_embedder.3。
 
-    with safe_open(path, framework="pt", device="cpu") as f:
-        teacher_keys = set(f.keys())
-        for tkey, skey, expect in WARMSTART_MAP:
-            if tkey not in teacher_keys:
-                report["missing"].append(tkey)
-                continue
-            if skey not in state:
-                report["skipped"].append(f"{skey}: 学生无此键")
-                continue
-            tv = f.get_tensor(tkey)
-            if tuple(tv.shape) != tuple(expect):
-                report["skipped"].append(
-                    f"{tkey}: 教师形状 {tuple(tv.shape)} != 期望 {expect}")
-                continue
-            sv = state[skey]
-            if tuple(sv.shape) != tuple(expect):
-                report["skipped"].append(
-                    f"{skey}: 学生形状 {tuple(sv.shape)} != 期望 {expect}")
-                continue
-            # dtype 对齐到学生（学生 bf16；教师也是 bf16，此处仅保稳健）
-            state[skey] = tv.to(dtype=sv.dtype).clone()
-            report["copied"].append(f"{tkey} -> {skey}")
-
-    model.load_state_dict(state, strict=False)
-    report["ok"] = len(report["copied"]) > 0 and not report["missing"]
-    return report
+    用于从已训 ckpt 做“门控修复”对照：不覆盖 patchify/head/t_embed/cond_proj，
+    避免把门控实验变成换头/换 patchify 的混合实验。
+    """
+    keys = modulation_map(model) + [
+        ("time_projection.1.weight", "ada_embedder.embedder.3.weight", (18432, 3072)),
+        ("time_projection.1.bias", "ada_embedder.embedder.3.bias", (18432,)),
+    ]
+    return _copy_teacher_keys(model, path, keys, mode="modulation_only")
 
 
 def format_report(report: Dict) -> str:
     copied = report.get("copied", [])
     skipped = report.get("skipped", [])
     missing = report.get("missing", [])
-    lines = [f"[warmstart] 教师热启动：拷贝 {len(copied)} 项"
+    lines = [f"[warmstart:{report.get('mode','full')}] 教师热启动：拷贝 {len(copied)} 项"
              f" / 跳过 {len(skipped)} / 缺失 {len(missing)}"]
     for c in copied:
         lines.append(f"    + {c}")

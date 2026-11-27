@@ -35,12 +35,11 @@ import time
 from datetime import datetime
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-# 训练子进程须用带 torch 的 python（可用环境变量 PYRAGATE_TRAIN_PYTHON 指定）；
-# Python312 拉起，sys.executable 会指向无 ROCm 的解释器 → import torch 失败 →
-# 子进程假死 → daemon 反复拉起形成套娃链（2026-11-22 实测事故）。故优先固定
-# 未指定时默认继承守护进程自身的解释器。
-_VENV_PY = os.environ.get("PYRAGATE_TRAIN_PYTHON", sys.executable)
-if os.path.isfile(_VENV_PY):
+# 训练子进程必须用带 torch+ROCm 的解释器。若 daemon 自身由无 ROCm 的 Python
+# 拉起，sys.executable 会指向错误解释器 → import torch 失败 → 子进程假死 →
+# daemon 反复拉起形成套娃链。可通过 PYTHON 环境变量显式指定解释器路径。
+_VENV_PY = os.environ.get("PYTHON", "")
+if _VENV_PY and os.path.isfile(_VENV_PY):
     PY = _VENV_PY
 else:
     PY = sys.executable
@@ -88,9 +87,9 @@ def main():
                     help="显存熔断比例，默认 0.93（留碎片缓冲）；不要设 >0.95")
     ap.add_argument("--out", default=os.path.join(HERE, "ckpt"))
     ap.add_argument("--save-every", type=int, default=500,
-                    help="存档间隔（建议 100→500，降低 9GB state_dict 拷贝频率）")
+                    help="存档间隔（审查建议 100→500，降低 9GB state_dict 拷贝频率）")
     ap.add_argument("--cycle-steps", type=int, default=1000,
-                    help="子进程每 N 步干净退出一次以清 HIP 碎片；0=禁用周期重启（建议 300→1000）")
+                    help="子进程每 N 步干净退出一次以清 HIP 碎片；0=禁用周期重启（审查建议 300→1000）")
     ap.add_argument("--max-restart", type=int, default=MAX_RESTART_DEFAULT)
     ap.add_argument("--restart-wait", type=int, default=15, help="重启前等待秒数")
     args = ap.parse_args()

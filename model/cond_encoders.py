@@ -1,5 +1,5 @@
 """
-轻量化条件编码器（2026-11-22，定案轻量 B 档）
+轻量化条件编码器（轻量 B 档）
 
 两个模块，沿用 VLM 文本注入链的「减层 + 低秩瓶颈」方案：
 
@@ -169,14 +169,24 @@ class ReferenceResampleAlignEncoder(nn.Module):
         self.norm = RMSNorm(dim, eps)
         self.align_proj = nn.Linear(dim, dim, bias=False)
         self.out_gate = nn.Parameter(torch.zeros(1))          # 零起步：严格恒等
+        # W3 修复：原 forward 里 cur_tokens 只用于取 batch size，当前 latent 完全
+        # 没参与"对齐"。补一条零初始化投影，起步恒等（不扰动热启动）。
+        self.cur_proj = nn.Linear(dim, dim, bias=False)
+        nn.init.zeros_(self.cur_proj.weight)
 
     def forward(self, cur_tokens: torch.Tensor, ref_tokens: torch.Tensor) -> torch.Tensor:
         """cur_tokens: [B,N,dim]; ref_tokens: [B,Nr,dim] → align_cond [B,dim]。"""
         B = cur_tokens.shape[0]
         q = self.resample_query.expand(B, -1, -1)             # [B, n_resample, dim]
         h = q
+        # W3：当前 latent 的全局摘要逐层注入重采样 query，让"对齐"真正同时看
+        # 当前帧与参考帧。cur_proj 零初始化 → 起步严格恒等。
+        cur_add = (self.cur_proj(cur_tokens.mean(dim=1)).unsqueeze(1)
+                   if cur_tokens is not None else None)
         for layer in self.resample_layers:
             h = layer(h, ctx=ref_tokens)                      # cross-attn: q←query, k/v←ref
+            if cur_add is not None:
+                h = h + cur_add
         fused = self.norm(h.mean(dim=1))                      # [B,dim]
         return torch.tanh(self.out_gate) * self.align_proj(fused)  # gate=0 → 恒等 0
 
